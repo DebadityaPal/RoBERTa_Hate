@@ -9,8 +9,8 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import RobertaConfig, RobertaTokenizer, get_cosine_schedule_with_warmup
-from roberta import RobertaForSequenceClassification
-from mixout import MixLinear
+from modelling.roberta import RobertaForSequenceClassification
+from modelling.mixout import MixLinear
 
 
 class ImplicitHateDataset(Dataset):

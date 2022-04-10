@@ -3,10 +3,10 @@ import random
 import torch
 import numpy as np
 import pandas as pd
-import subprocess
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from transformers import BertForSequenceClassification, BertTokenizer
+from transformers import RobertaTokenizer
+from modelling.roberta import RobertaForSequenceClassification
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 
@@ -49,7 +49,7 @@ def parse_arguments():
                         help="Random seed for initialization.")
 
     parser.add_argument("--tokenizer_path",
-                        default='bert-base-uncased', type=str,
+                        default='roberta-base', type=str,
                         help="The path to the tokenizer.")
 
     parser.add_argument("--num_labels",
@@ -136,11 +136,11 @@ def main():
     print("DataLoader configured...")
 
     # Setting up tokenizer
-    tokenizer = BertTokenizer.from_pretrained(args.tokenizer_path)
+    tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_path)
 
     # Setting up the model
-    model = BertForSequenceClassification.from_pretrained(
-        'bert-base-uncased', num_labels=args.num_labels)
+    model = RobertaForSequenceClassification.from_pretrained(
+        'roberta-base', num_labels=args.num_labels)
     model.load_state_dict(torch.load(args.model_path))
     print("Model configured...")
 

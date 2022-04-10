@@ -8,8 +8,9 @@ from torch import nn
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from transformers import BertConfig, BertForSequenceClassification, BertTokenizer, get_cosine_schedule_with_warmup
-from mixout import MixLinear
+from transformers import RobertaConfig, RobertaTokenizer, get_cosine_schedule_with_warmup
+from modelling.roberta import RobertaForSequenceClassification
+from modelling.mixout import MixLinear
 
 
 class ImplicitHateDataset(Dataset):
@@ -39,10 +40,10 @@ def parse_arguments():
                         nargs='+',
                         help="The input files. Should contain csv files for the task.")
 
-    parser.add_argument("--bert_model_path",
-                        default="bert-base-uncased",
+    parser.add_argument("--roberta_model_path",
+                        default="roberta-base",
                         type=str,
-                        help="Bert model type or path to weights directory.")
+                        help="Roberta model type or path to weights directory.")
 
     parser.add_argument("--output_dir",
                         default=None,
@@ -71,7 +72,7 @@ def parse_arguments():
                         help="Total number of training epochs to perform.")
 
     parser.add_argument("--tokenizer_path",
-                        default='bert-base-uncased',
+                        default='roberta-base',
                         type=str,
                         help="The path to the tokenizer.")
 
@@ -109,11 +110,11 @@ def get_optimizer_params(model, type='s'):
             lambda x: x.requires_grad, model.parameters())
     elif type == 'i':
         optimizer_parameters = [
-            {'params': [p for n, p in model.bert.named_parameters() if not any(nd in n for nd in no_decay)],
+            {'params': [p for n, p in model.roberta.named_parameters() if not any(nd in n for nd in no_decay)],
              'weight_decay_rate': 0.01},
-            {'params': [p for n, p in model.bert.named_parameters() if any(nd in n for nd in no_decay)],
+            {'params': [p for n, p in model.roberta.named_parameters() if any(nd in n for nd in no_decay)],
              'weight_decay_rate': 0.0},
-            {'params': [p for n, p in model.named_parameters() if "bert" not in n],
+            {'params': [p for n, p in model.named_parameters() if "roberta" not in n],
              'lr': 1e-3,
              'weight_decay_rate':0.01}
         ]
@@ -124,24 +125,24 @@ def get_optimizer_params(model, type='s'):
         group_all = ['layer.0.', 'layer.1.', 'layer.2.', 'layer.3.', 'layer.4.', 'layer.5.',
                      'layer.6.', 'layer.7.', 'layer.8.', 'layer.9.', 'layer.10.', 'layer.11.']
         optimizer_parameters = [
-            {'params': [p for n, p in model.bert.named_parameters() if not any(
+            {'params': [p for n, p in model.roberta.named_parameters() if not any(
                 nd in n for nd in no_decay) and not any(nd in n for nd in group_all)], 'weight_decay_rate': 0.01},
-            {'params': [p for n, p in model.bert.named_parameters() if not any(nd in n for nd in no_decay) and any(
+            {'params': [p for n, p in model.roberta.named_parameters() if not any(nd in n for nd in no_decay) and any(
                 nd in n for nd in group1)], 'weight_decay_rate': 0.01, 'lr': learning_rate/2.6},
-            {'params': [p for n, p in model.bert.named_parameters() if not any(nd in n for nd in no_decay) and any(
+            {'params': [p for n, p in model.roberta.named_parameters() if not any(nd in n for nd in no_decay) and any(
                 nd in n for nd in group2)], 'weight_decay_rate': 0.01, 'lr': learning_rate},
-            {'params': [p for n, p in model.bert.named_parameters() if not any(nd in n for nd in no_decay) and any(
+            {'params': [p for n, p in model.roberta.named_parameters() if not any(nd in n for nd in no_decay) and any(
                 nd in n for nd in group3)], 'weight_decay_rate': 0.01, 'lr': learning_rate*2.6},
-            {'params': [p for n, p in model.bert.named_parameters() if any(
+            {'params': [p for n, p in model.roberta.named_parameters() if any(
                 nd in n for nd in no_decay) and not any(nd in n for nd in group_all)], 'weight_decay_rate': 0.0},
-            {'params': [p for n, p in model.bert.named_parameters() if any(nd in n for nd in no_decay) and any(
+            {'params': [p for n, p in model.roberta.named_parameters() if any(nd in n for nd in no_decay) and any(
                 nd in n for nd in group1)], 'weight_decay_rate': 0.0, 'lr': learning_rate/2.6},
-            {'params': [p for n, p in model.bert.named_parameters() if any(nd in n for nd in no_decay) and any(
+            {'params': [p for n, p in model.roberta.named_parameters() if any(nd in n for nd in no_decay) and any(
                 nd in n for nd in group2)], 'weight_decay_rate': 0.0, 'lr': learning_rate},
-            {'params': [p for n, p in model.bert.named_parameters() if any(nd in n for nd in no_decay) and any(
+            {'params': [p for n, p in model.roberta.named_parameters() if any(nd in n for nd in no_decay) and any(
                 nd in n for nd in group3)], 'weight_decay_rate': 0.0, 'lr': learning_rate*2.6},
             {'params': [p for n, p in model.named_parameters(
-            ) if "bert" not in n], 'lr':1e-3, "momentum": 0.99},
+            ) if "roberta" not in n], 'lr':1e-3, "momentum": 0.99},
         ]
     return optimizer_parameters
 
@@ -167,7 +168,7 @@ def initialize_mixout(model):
 def re_init_layers(model, config):
     if args.reinit_n_layers > 0:
         print(f'Reinitializing Last {args.reinit_n_layers} Layers ...')
-        encoder_temp = getattr(model, 'bert')
+        encoder_temp = getattr(model, 'roberta')
         for layer in encoder_temp.encoder.layer[-args.reinit_n_layers:]:
             for module in layer.modules():
                 if isinstance(module, nn.Linear):
@@ -222,7 +223,7 @@ def train(model, tokenizer, ds_train, ds_eval):
         'eval': []
     }
     min_eval_loss = float('inf')
-    params = get_optimizer_params(model, 's')
+    params = get_optimizer_params(model, 'i')
     optim = torch.optim.AdamW(params, args.learning_rate)
     scheduler = get_cosine_schedule_with_warmup(
         optim, num_warmup_steps=len(ds_train), num_training_steps=len(ds_train) * args.num_train_epochs)
@@ -292,20 +293,17 @@ def main():
     label_weights = calculate_label_weights(ds_train)
     ds_train = ImplicitHateDataset(ds_train)
     ds_eval = ImplicitHateDataset(ds_eval)
-    weights = [label_weights[ds_train[i][1]] for i in range(len(ds_train))]
-    sampler = torch.utils.data.sampler.WeightedRandomSampler(
-        torch.DoubleTensor(weights), len(weights))
     print("Setting up dataloaders ...")
     ds_train = DataLoader(
-        ds_train, batch_size=args.train_batch_size, sampler=sampler)
+        ds_train, batch_size=args.train_batch_size, shuffle=True)
     ds_eval = DataLoader(
         ds_eval,  batch_size=args.train_batch_size, shuffle=True)
     print("Setting up tokenizer ...")
-    tokenizer = BertTokenizer.from_pretrained(args.tokenizer_path)
+    tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_path)
     print("Setting up model ...")
-    config = BertConfig.from_pretrained(args.bert_model_path)
-    model = BertForSequenceClassification.from_pretrained(
-        args.bert_model_path, num_labels=args.num_labels)
+    config = RobertaConfig.from_pretrained(args.roberta_model_path)
+    model = RobertaForSequenceClassification.from_pretrained(
+        args.roberta_model_path, num_labels=args.num_labels)
     re_init_layers(model, config)
     initialize_mixout(model)
     print("Starting training...")
