@@ -103,7 +103,7 @@ def parse_arguments():
 def get_optimizer_params(model, type='s'):
     # differential learning rate and weight decay
     param_optimizer = list(model.named_parameters())
-    learning_rate = 1e-5
+    learning_rate = args.learning_rate
     no_decay = ['bias']
     if type == 's':
         optimizer_parameters = filter(
