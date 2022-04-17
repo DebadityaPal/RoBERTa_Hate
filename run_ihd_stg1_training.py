@@ -8,8 +8,8 @@ from torch import nn
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from transformers import RobertaConfig, RobertaTokenizer, get_cosine_schedule_with_warmup
-from transformers import RobertaForSequenceClassification
+from transformers import RobertaConfig, RobertaTokenizer, get_constant_schedule_with_warmup
+from transformers import RobertaModel
 from modelling.mixout import MixLinear
 
 
@@ -30,6 +30,28 @@ class ImplicitHateDataset(Dataset):
             return row['post'], 0
         elif row['class'] == 'implicit_hate':
             return row['post'], 1
+
+
+class IHDModel(torch.nn.Module):
+    def __init__(self):
+        super(IHDModel, self).__init__()
+        self.roberta = RobertaModel.from_pretrained(args.roberta_model_path)
+        self.fc1 = torch.nn.Linear(768, 100)
+        self.act1 = torch.nn.ReLU()
+        self.fc2 = torch.nn.Linear(100, 100)
+        self.act2 = torch.nn.ReLU()
+        self.fc3 = torch.nn.Linear(100, args.num_labels)
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.roberta(
+            input_ids, attention_mask=attention_mask)
+        x = outputs[0]
+        x = self.fc1(x[:, 0, :])
+        x = self.act1(x)
+        x = self.fc2(x)
+        x = self.act2(x)
+        x = self.fc3(x)
+        return x
 
 
 def parse_arguments():
@@ -67,7 +89,7 @@ def parse_arguments():
                         help="The initial learning rate for Adam.")
 
     parser.add_argument("--num_train_epochs",
-                        default=4,
+                        default=3,
                         type=int,
                         help="Total number of training epochs to perform.")
 
@@ -115,10 +137,10 @@ def get_optimizer_params(model, type='s'):
             {'params': [p for n, p in model.roberta.named_parameters() if any(nd in n for nd in no_decay)],
              'weight_decay': 0.0},
             {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and "roberta" not in n],
-             'lr': 1e-3,
+             'lr': learning_rate*10,
              'weight_decay':0.01},
             {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and "roberta" not in n],
-             'lr': 1e-3,
+             'lr': learning_rate*10,
              'weight_decay':0.0},
         ]
     elif type == 'a':
@@ -140,9 +162,9 @@ def get_optimizer_params(model, type='s'):
             {'params': [p for n, p in model.roberta.named_parameters() if any(nd in n for nd in no_decay) and any(
                 nd in n for nd in group3)], 'weight_decay': 0.0, 'lr': learning_rate*2.6},
             {'params': [p for n, p in model.named_parameters() if not any(
-                nd in n for nd in no_decay) and "roberta" not in n], 'lr':1e-3, 'weight_decay': 0.01},
+                nd in n for nd in no_decay) and "roberta" not in n], 'lr':learning_rate*10, 'weight_decay': 0.01},
             {'params': [p for n, p in model.named_parameters() if any(
-                nd in n for nd in no_decay) and "roberta" not in n], 'lr':1e-3, 'weight_decay': 0.0},
+                nd in n for nd in no_decay) and "roberta" not in n], 'lr':learning_rate*10, 'weight_decay': 0.0},
         ]
     return optimizer_parameters
 
@@ -225,8 +247,8 @@ def train(model, tokenizer, ds_train, ds_eval):
     min_eval_loss = float('inf')
     params = get_optimizer_params(model, 'a')
     optim = torch.optim.AdamW(params, args.learning_rate)
-    scheduler = get_cosine_schedule_with_warmup(
-        optim, num_warmup_steps=len(ds_train) * args.num_train_epochs // 2, num_training_steps=len(ds_train) * args.num_train_epochs)
+    scheduler = get_constant_schedule_with_warmup(
+        optim, num_warmup_steps=len(ds_train))
     for epoch in range(args.num_train_epochs):
         avg_loss = 0
         optim.zero_grad()
@@ -238,9 +260,9 @@ def train(model, tokenizer, ds_train, ds_eval):
                     input_ids = inputs['input_ids'].to(device)
                     stg1_labels = label.to(device)
                     attention_mask = inputs['attention_mask'].to(device)
-                outputs = model(
-                    input_ids, attention_mask=attention_mask, labels=stg1_labels)
-                loss = outputs.loss
+                outputs = model(input_ids, attention_mask=attention_mask)
+                criterion = nn.CrossEntropyLoss()
+                loss = criterion(outputs, stg1_labels)
                 optim.zero_grad()
                 loss.backward()
                 optim.step()
@@ -261,9 +283,9 @@ def train(model, tokenizer, ds_train, ds_eval):
                     input_ids = inputs['input_ids'].to(device)
                     stg1_labels = label.to(device)
                     attention_mask = inputs['attention_mask'].to(device)
-                    outputs = model(
-                        input_ids, attention_mask=attention_mask, labels=stg1_labels)
-                    loss = outputs.loss
+                    outputs = model(input_ids, attention_mask=attention_mask)
+                    criterion = nn.CrossEntropyLoss()
+                    loss = criterion(outputs, stg1_labels)
                     avg_loss += (loss.item() / len(ds_eval))
                     eepoch.set_description(f'Eval Epoch {epoch}')
                     eepoch.set_postfix(loss=loss.item())
@@ -301,8 +323,7 @@ def main():
     tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_path)
     print("Setting up model ...")
     config = RobertaConfig.from_pretrained(args.roberta_model_path)
-    model = RobertaForSequenceClassification.from_pretrained(
-        args.roberta_model_path, num_labels=args.num_labels)
+    model = IHDModel()
     re_init_layers(model, config)
     initialize_mixout(model)
     print("Starting training...")

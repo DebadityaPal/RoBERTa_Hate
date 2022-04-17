@@ -6,7 +6,7 @@ import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import RobertaTokenizer
-from transformers import RobertaForSequenceClassification
+from transformers import RobertaModel
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 
@@ -27,6 +27,28 @@ class ImplicitHateDataset(Dataset):
             return row['post'], 0
         elif row['class'] == 'implicit_hate':
             return row['post'], 1
+
+
+class IHDModel(torch.nn.Module):
+    def __init__(self):
+        super(IHDModel, self).__init__()
+        self.roberta = RobertaModel.from_pretrained('roberta-base')
+        self.fc1 = torch.nn.Linear(768, 100)
+        self.act1 = torch.nn.ReLU()
+        self.fc2 = torch.nn.Linear(100, 100)
+        self.act2 = torch.nn.ReLU()
+        self.fc3 = torch.nn.Linear(100, args.num_labels)
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.roberta(
+            input_ids, attention_mask=attention_mask)
+        x = outputs[0]
+        x = self.fc1(x[:, 0, :])
+        x = self.act1(x)
+        x = self.fc2(x)
+        x = self.act2(x)
+        x = self.fc3(x)
+        return x
 
 
 def parse_arguments():
@@ -90,7 +112,7 @@ def evaluate(model, dataset, tokenizer):
                 y_true = y_true + list(label.numpy())
                 outputs = model(input_ids=input_ids,
                                 attention_mask=attention_mask)
-                logits = outputs.logits
+                logits = outputs
                 y_pred = y_pred + \
                     list(
                         logits.detach().cpu().max(1).indices.numpy())
@@ -134,8 +156,7 @@ def main():
     tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_path)
 
     # Setting up the model
-    model = RobertaForSequenceClassification.from_pretrained(
-        'roberta-base', num_labels=args.num_labels)
+    model = IHDModel()
     model.load_state_dict(torch.load(args.model_path))
     print("Model configured...")
 
