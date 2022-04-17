@@ -224,7 +224,7 @@ def train(model, tokenizer, ds_train, ds_eval):
     params = get_optimizer_params(model, 'i')
     optim = torch.optim.AdamW(model.parameters(), args.learning_rate)
     scheduler = get_cosine_schedule_with_warmup(
-        optim, num_warmup_steps=len(ds_train), num_training_steps=len(ds_train) * args.num_train_epochs)
+        optim, num_warmup_steps=len(ds_train) * args.num_train_epochs // 2, num_training_steps=len(ds_train) * args.num_train_epochs)
     for epoch in range(args.num_train_epochs):
         avg_loss = 0
         optim.zero_grad()

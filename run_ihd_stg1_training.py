@@ -225,8 +225,6 @@ def train(model, tokenizer, ds_train, ds_eval):
     min_eval_loss = float('inf')
     params = get_optimizer_params(model, 'a')
     optim = torch.optim.AdamW(params, args.learning_rate)
-    # optim = torch.optim.AdamW(
-    #     model.parameters(), args.learning_rate, weight_decay=0.01)
     scheduler = get_cosine_schedule_with_warmup(
         optim, num_warmup_steps=len(ds_train) * args.num_train_epochs // 2, num_training_steps=len(ds_train) * args.num_train_epochs)
     for epoch in range(args.num_train_epochs):
@@ -305,8 +303,8 @@ def main():
     config = RobertaConfig.from_pretrained(args.roberta_model_path)
     model = RobertaForSequenceClassification.from_pretrained(
         args.roberta_model_path, num_labels=args.num_labels)
-    # re_init_layers(model, config)
-    # initialize_mixout(model)
+    re_init_layers(model, config)
+    initialize_mixout(model)
     print("Starting training...")
     loss_history = train(model, tokenizer, ds_train, ds_eval)
     print("Saving loss history...")
