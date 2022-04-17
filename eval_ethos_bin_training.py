@@ -10,7 +10,7 @@ from modelling.roberta import RobertaForSequenceClassification
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 
-class ImplicitHateDataset(Dataset):
+class EthosBinaryDataset(Dataset):
     def __init__(self, dataset):
         self.dataset = dataset
         self.dataset = self.dataset.sample(
@@ -23,10 +23,10 @@ class ImplicitHateDataset(Dataset):
         return self.transform(self.dataset.iloc[index])
 
     def transform(self, row):
-        if row['class'] == 'not_hate':
-            return row['post'], 0
-        elif row['class'] == 'implicit_hate':
-            return row['post'], 1
+        if row['isHate'] > 0.5:
+            return row['comment'], 1
+        else:
+            return row['comment'], 0
 
 
 def parse_arguments():
@@ -127,7 +127,7 @@ def main():
 
     # Setting up datasets
     test_dataset = get_datasets()
-    test_dataset = ImplicitHateDataset(test_dataset)
+    test_dataset = EthosBinaryDataset(test_dataset)
     print("Datsets configured...")
 
     # Setting up dataloaders

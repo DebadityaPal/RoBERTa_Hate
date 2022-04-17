@@ -1,5 +1,6 @@
 import argparse
 import random
+import json
 import torch
 import os
 import numpy as np
@@ -13,7 +14,7 @@ from modelling.roberta import RobertaForSequenceClassification
 from modelling.mixout import MixLinear
 
 
-class ImplicitHateDataset(Dataset):
+class HateXplainDataset(Dataset):
     def __init__(self, dataset):
         self.dataset = dataset
         self.dataset = self.dataset.sample(
@@ -26,18 +27,14 @@ class ImplicitHateDataset(Dataset):
         return self.transform(self.dataset.iloc[index])
 
     def transform(self, row):
-        if row['class'] == 'not_hate':
-            return row['post'], 0
-        elif row['class'] == 'implicit_hate':
-            return row['post'], 1
+        return row['text'], row['label']
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Stage 1 training script")
-    parser.add_argument("--input_files",
+    parser.add_argument("--input_file",
                         default=None,
                         required=True,
-                        nargs='+',
                         help="The input files. Should contain csv files for the task.")
 
     parser.add_argument("--roberta_model_path",
@@ -83,7 +80,7 @@ def parse_arguments():
 
     parser.add_argument("--num_labels",
                         type=int,
-                        default=2,
+                        default=3,
                         help="Number of labels.")
 
     parser.add_argument("--reinit_n_layers",
@@ -187,12 +184,23 @@ def re_init_layers(model, config):
 
 
 def get_datasets():
-    ds = pd.DataFrame()
-    for input_file in args.input_files:
-        ds = ds.append(pd.read_csv(input_file, sep='\t'))
+    with open(args.input_file) as f:
+        data = json.load(f)
+    text = []
+    label = []
+    for key in data.keys():
+        text.append(" ".join(data[key]["post_tokens"]))
+        annot = [0, 0, 0]
+        for annotation in data[key]['annotators']:
+            if annotation['label'] == 'normal':
+                annot[0] += 1
+            elif annotation['label'] == 'offensive':
+                annot[1] += 1
+            else:
+                annot[2] += 1
+        label.append(np.argmax(annot))
 
-    ds = ds.loc[ds['class'] != 'explicit_hate']
-
+    ds = pd.DataFrame({"text": text, "label": label})
     ds_train, ds_test = train_test_split(
         ds, test_size=0.2, random_state=42)
     ds_train, ds_eval = train_test_split(
@@ -202,16 +210,6 @@ def get_datasets():
     ds_test = ds_test.reset_index(drop=True)
     ds_eval = ds_eval.reset_index(drop=True)
     return ds_train, ds_eval, ds_test
-
-
-def calculate_label_weights(ds):
-    label_counts = ds['class'].value_counts()
-    label_weights = {}
-    for label in label_counts.index:
-        label_weights[label] = len(ds) / label_counts[label]
-
-    label_weights = [label_weights['not_hate'], label_weights['implicit_hate']]
-    return label_weights
 
 
 def train(model, tokenizer, ds_train, ds_eval):
@@ -224,7 +222,7 @@ def train(model, tokenizer, ds_train, ds_eval):
     }
     min_eval_loss = float('inf')
     params = get_optimizer_params(model, 'i')
-    optim = torch.optim.AdamW(params, args.learning_rate)
+    optim = torch.optim.AdamW(model.parameters(), args.learning_rate)
     scheduler = get_cosine_schedule_with_warmup(
         optim, num_warmup_steps=len(ds_train), num_training_steps=len(ds_train) * args.num_train_epochs)
     for epoch in range(args.num_train_epochs):
@@ -279,7 +277,7 @@ def train(model, tokenizer, ds_train, ds_eval):
 
 
 def main():
-    print("running with input files: \n", args.input_files)
+    print("running with input files: \n", args.input_file)
     print("Setting up random seeds ...")
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -290,9 +288,8 @@ def main():
     ds_train.to_csv(os.path.join(args.output_dir, 'train.csv'), index=False)
     ds_test.to_csv(os.path.join(args.output_dir, 'test.csv'), index=False)
     ds_eval.to_csv(os.path.join(args.output_dir, 'eval.csv'), index=False)
-    label_weights = calculate_label_weights(ds_train)
-    ds_train = ImplicitHateDataset(ds_train)
-    ds_eval = ImplicitHateDataset(ds_eval)
+    ds_train = HateXplainDataset(ds_train)
+    ds_eval = HateXplainDataset(ds_eval)
     print("Setting up dataloaders ...")
     ds_train = DataLoader(
         ds_train, batch_size=args.train_batch_size, shuffle=True)

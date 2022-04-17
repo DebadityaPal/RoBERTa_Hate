@@ -7,7 +7,7 @@ import subprocess
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import RobertaTokenizer
-from roberta import RobertaForSequenceClassification
+from modelling.roberta import RobertaForSequenceClassification
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 
