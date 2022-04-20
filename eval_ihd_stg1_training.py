@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from transformers import RobertaTokenizer
-from transformers import RobertaModel
+from transformers import RobertaTokenizer, RobertaModel
+from modelling.roberta import WeightedLayerPooling
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 
@@ -34,9 +34,9 @@ class IHDModel(torch.nn.Module):
         super(IHDModel, self).__init__()
         self.roberta = RobertaModel.from_pretrained('roberta-base')
         self.fc1 = torch.nn.Linear(768, 100)
-        self.act1 = torch.nn.ReLU()
+        self.act1 = torch.nn.Tanh()
         self.fc2 = torch.nn.Linear(100, 100)
-        self.act2 = torch.nn.ReLU()
+        self.act2 = torch.nn.Tanh()
         self.fc3 = torch.nn.Linear(100, args.num_labels)
 
     def forward(self, input_ids, attention_mask):

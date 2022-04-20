@@ -8,8 +8,8 @@ from torch import nn
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from transformers import RobertaConfig, RobertaTokenizer, get_constant_schedule_with_warmup
-from transformers import RobertaModel
+from transformers import RobertaConfig, RobertaTokenizer, get_linear_schedule_with_warmup, RobertaModel
+from modelling.roberta import WeightedLayerPooling
 from modelling.mixout import MixLinear
 
 
@@ -37,9 +37,9 @@ class IHDModel(torch.nn.Module):
         super(IHDModel, self).__init__()
         self.roberta = RobertaModel.from_pretrained(args.roberta_model_path)
         self.fc1 = torch.nn.Linear(768, 100)
-        self.act1 = torch.nn.ReLU()
+        self.act1 = torch.nn.Tanh()
         self.fc2 = torch.nn.Linear(100, 100)
-        self.act2 = torch.nn.ReLU()
+        self.act2 = torch.nn.Tanh()
         self.fc3 = torch.nn.Linear(100, args.num_labels)
 
     def forward(self, input_ids, attention_mask):
@@ -170,13 +170,14 @@ def get_optimizer_params(model, type='s'):
 
 
 def initialize_mixout(model):
+    no_mixout = ['fc1', 'fc2', 'fc3', 'query', 'key', 'value']
     if args.mixout_rate > 0:
         print('Initializing Mixout Regularization')
         for sup_module in model.modules():
             for name, module in sup_module.named_children():
                 if isinstance(module, nn.Dropout):
                     module.p = 0.0
-                if isinstance(module, nn.Linear):
+                if isinstance(module, nn.Linear) and not(name in no_mixout):
                     target_state_dict = module.state_dict()
                     bias = True if module.bias is not None else False
                     new_module = MixLinear(
@@ -247,8 +248,8 @@ def train(model, tokenizer, ds_train, ds_eval):
     min_eval_loss = float('inf')
     params = get_optimizer_params(model, 'a')
     optim = torch.optim.AdamW(params, args.learning_rate)
-    scheduler = get_constant_schedule_with_warmup(
-        optim, num_warmup_steps=len(ds_train))
+    scheduler = get_linear_schedule_with_warmup(
+        optim, num_warmup_steps=len(ds_train), num_training_steps=len(ds_train) * args.num_train_epochs)
     for epoch in range(args.num_train_epochs):
         avg_loss = 0
         optim.zero_grad()
