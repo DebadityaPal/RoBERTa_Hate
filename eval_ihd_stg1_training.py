@@ -6,7 +6,6 @@ import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import RobertaTokenizer, RobertaModel
-from modelling.roberta import WeightedLayerPooling
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 

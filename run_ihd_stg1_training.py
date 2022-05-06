@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import RobertaConfig, RobertaTokenizer, get_linear_schedule_with_warmup, RobertaModel
-from modelling.mixout import MixLinear
+from modelling.mixout import recursive_setattr, replace_layer_for_mixout
 
 
 class ImplicitHateDataset(Dataset):
@@ -126,9 +126,9 @@ def parse_arguments():
     return args
 
 
-def get_optimizer_params(model, type='s'):
+def get_optimizer_params(model, type):
+    print("Optimizer Type: ", type)
     # differential learning rate and weight decay
-    param_optimizer = list(model.named_parameters())
     learning_rate = args.learning_rate
     no_decay = ['bias']
     if type == 's':
@@ -174,22 +174,12 @@ def get_optimizer_params(model, type='s'):
 
 
 def initialize_mixout(model):
-    no_mixout = ['fc1', 'fc2', 'fc3', 'query', 'key', 'value']
     if args.mixout_rate > 0:
-        print('Initializing Mixout Regularization')
-        for sup_module in model.modules():
-            for name, module in sup_module.named_children():
-                if isinstance(module, nn.Dropout):
-                    module.p = 0.0
-                if isinstance(module, nn.Linear) and not(name in no_mixout):
-                    target_state_dict = module.state_dict()
-                    bias = True if module.bias is not None else False
-                    new_module = MixLinear(
-                        module.in_features, module.out_features, bias, target_state_dict[
-                            "weight"], args.mixout_rate
-                    )
-                    new_module.load_state_dict(target_state_dict)
-                    setattr(sup_module, name, new_module)
+        print("Initializing Mixout with probability: ", args.mixout_rate)
+        for name, module in tuple(model.named_modules()):
+            if name:
+                recursive_setattr(model, name, replace_layer_for_mixout(
+                    module, mixout_prob=args.mixout_rate))
 
 
 def re_init_layers(model, config):
@@ -250,10 +240,10 @@ def train(model, tokenizer, ds_train, ds_eval):
         'eval': []
     }
     min_eval_loss = float('inf')
-    params = get_optimizer_params(model, 'a')
+    params = get_optimizer_params(model, args.llrd_type)
     optim = torch.optim.AdamW(params, args.learning_rate)
     scheduler = get_linear_schedule_with_warmup(
-        optim, num_warmup_steps=len(ds_train), num_training_steps=len(ds_train) * args.num_train_epochs)
+        optim, num_warmup_steps=len(ds_train) * args.num_train_epochs * 0.1, num_training_steps=len(ds_train) * args.num_train_epochs)
     for epoch in range(args.num_train_epochs):
         avg_loss = 0
         optim.zero_grad()

@@ -8,9 +8,8 @@ from torch import nn
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from transformers import RobertaConfig, RobertaTokenizer, get_linear_schedule_with_warmup
-from modelling.roberta import RobertaForSequenceClassification
-from modelling.mixout import MixLinear
+from transformers import RobertaConfig, RobertaTokenizer, RobertaModel, get_linear_schedule_with_warmup
+from modelling.mixout import recursive_setattr, replace_layer_for_mixout
 
 
 class ImplicitHateDataset(Dataset):
@@ -40,6 +39,28 @@ class ImplicitHateDataset(Dataset):
             return row['post'], 5
         elif row['implicit_class'] == 'other':
             return row['post'], 6
+
+
+class IHDModel(torch.nn.Module):
+    def __init__(self):
+        super(IHDModel, self).__init__()
+        self.roberta = RobertaModel.from_pretrained(args.roberta_model_path)
+        self.fc1 = torch.nn.Linear(768, 100)
+        self.act1 = torch.nn.Tanh()
+        self.fc2 = torch.nn.Linear(100, 100)
+        self.act2 = torch.nn.Tanh()
+        self.fc3 = torch.nn.Linear(100, args.num_labels)
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.roberta(
+            input_ids, attention_mask=attention_mask)
+        x = outputs[0]
+        x = self.fc1(x[:, 0, :])
+        x = self.act1(x)
+        x = self.fc2(x)
+        x = self.act2(x)
+        x = self.fc3(x)
+        return x
 
 
 def parse_arguments():
@@ -102,7 +123,7 @@ def parse_arguments():
                         help="Re-init last n encoder layers")
 
     parser.add_argument("--mixout_rate",
-                        default=0.7,
+                        default=0.3,
                         type=float,
                         help="Mixout regularization rate")
 
@@ -116,8 +137,8 @@ def parse_arguments():
 
 
 def get_optimizer_params(model, type='s'):
+    print("Optimizer Type: ", type)
     # differential learning rate and weight decay
-    param_optimizer = list(model.named_parameters())
     learning_rate = args.learning_rate
     no_decay = ['bias']
     if type == 's':
@@ -164,20 +185,11 @@ def get_optimizer_params(model, type='s'):
 
 def initialize_mixout(model):
     if args.mixout_rate > 0:
-        print('Initializing Mixout Regularization')
-        for sup_module in model.modules():
-            for name, module in sup_module.named_children():
-                if isinstance(module, nn.Dropout):
-                    module.p = 0.0
-                if isinstance(module, nn.Linear):
-                    target_state_dict = module.state_dict()
-                    bias = True if module.bias is not None else False
-                    new_module = MixLinear(
-                        module.in_features, module.out_features, bias, target_state_dict[
-                            "weight"], args.mixout_rate
-                    )
-                    new_module.load_state_dict(target_state_dict)
-                    setattr(sup_module, name, new_module)
+        print("Initializing Mixout with probability: ", args.mixout_rate)
+        for name, module in tuple(model.named_modules()):
+            if name:
+                recursive_setattr(model, name, replace_layer_for_mixout(
+                    module, mixout_prob=args.mixout_rate))
 
 
 def re_init_layers(model, config):
@@ -230,8 +242,8 @@ def train(model, tokenizer, ds_train, ds_eval):
     min_eval_loss = float('inf')
     params = get_optimizer_params(model, args.llrd_type)
     optim = torch.optim.AdamW(params, args.learning_rate)
-    # scheduler = get_linear_schedule_with_warmup(
-    #     optim, num_warmup_steps=len(ds_train) * args.num_train_epochs, num_training_steps=len(ds_train) * args.num_train_epochs)
+    scheduler = get_linear_schedule_with_warmup(
+        optim, num_warmup_steps=len(ds_train) * args.num_train_epochs * 0.1, num_training_steps=len(ds_train) * args.num_train_epochs)
     for epoch in range(args.num_train_epochs):
         avg_loss = 0
         optim.zero_grad()
@@ -243,13 +255,13 @@ def train(model, tokenizer, ds_train, ds_eval):
                     input_ids = inputs['input_ids'].to(device)
                     stg1_labels = label.to(device)
                     attention_mask = inputs['attention_mask'].to(device)
-                outputs = model(
-                    input_ids, attention_mask=attention_mask, labels=stg1_labels)
-                loss = outputs.loss
+                outputs = model(input_ids, attention_mask=attention_mask)
+                criterion = nn.CrossEntropyLoss()
+                loss = criterion(outputs, stg1_labels)
                 optim.zero_grad()
                 loss.backward()
                 optim.step()
-                # scheduler.step()
+                scheduler.step()
                 avg_loss += (loss.item() / len(ds_train))
                 tepoch.set_description(f'Train Epoch {epoch}')
                 tepoch.set_postfix(loss=loss.item())
@@ -266,9 +278,9 @@ def train(model, tokenizer, ds_train, ds_eval):
                     input_ids = inputs['input_ids'].to(device)
                     stg1_labels = label.to(device)
                     attention_mask = inputs['attention_mask'].to(device)
-                    outputs = model(
-                        input_ids, attention_mask=attention_mask, labels=stg1_labels)
-                    loss = outputs.loss
+                    outputs = model(input_ids, attention_mask=attention_mask)
+                    criterion = nn.CrossEntropyLoss()
+                    loss = criterion(outputs, stg1_labels)
                     avg_loss += (loss.item() / len(ds_eval))
                     eepoch.set_description(f'Eval Epoch {epoch}')
                     eepoch.set_postfix(loss=loss.item())
@@ -306,8 +318,7 @@ def main():
     tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_path)
     print("Setting up model ...")
     config = RobertaConfig.from_pretrained(args.roberta_model_path)
-    model = RobertaForSequenceClassification.from_pretrained(
-        args.roberta_model_path, num_labels=args.num_labels)
+    model = IHDModel()
     re_init_layers(model, config)
     initialize_mixout(model)
     print("Starting training...")
