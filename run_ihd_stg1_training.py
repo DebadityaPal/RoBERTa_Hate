@@ -9,7 +9,6 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import RobertaConfig, RobertaTokenizer, get_linear_schedule_with_warmup, RobertaModel
-from modelling.roberta import WeightedLayerPooling
 from modelling.mixout import MixLinear
 
 
@@ -118,6 +117,11 @@ def parse_arguments():
                         type=float,
                         help="Mixout regularization rate")
 
+    parser.add_argument("--llrd_type",
+                        default='s',
+                        choices=['s', 'i', 'a'],
+                        help="LLRD type")
+
     args = parser.parse_args()
     return args
 
@@ -219,7 +223,7 @@ def get_datasets():
     ds_train, ds_test = train_test_split(
         ds, test_size=0.2, random_state=42)
     ds_train, ds_eval = train_test_split(
-        ds_train, test_size=0.25, random_state=args.seed)
+        ds_train, test_size=0.25, random_state=42)
 
     ds_train = ds_train.reset_index(drop=True)
     ds_test = ds_test.reset_index(drop=True)

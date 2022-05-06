@@ -194,7 +194,7 @@ def get_datasets():
     ds_train, ds_test = train_test_split(
         ds, test_size=0.2, random_state=42)
     ds_train, ds_eval = train_test_split(
-        ds_train, test_size=0.25, random_state=args.seed)
+        ds_train, test_size=0.25, random_state=42)
 
     ds_train = ds_train.reset_index(drop=True)
     ds_test = ds_test.reset_index(drop=True)

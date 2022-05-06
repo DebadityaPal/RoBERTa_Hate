@@ -8,7 +8,7 @@ from torch import nn
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-from transformers import RobertaConfig, RobertaTokenizer, get_cosine_schedule_with_warmup
+from transformers import RobertaConfig, RobertaTokenizer, get_linear_schedule_with_warmup
 from modelling.roberta import RobertaForSequenceClassification
 from modelling.mixout import MixLinear
 
@@ -106,6 +106,11 @@ def parse_arguments():
                         type=float,
                         help="Mixout regularization rate")
 
+    parser.add_argument("--llrd_type",
+                        default='s',
+                        choices=['s', 'i', 'a'],
+                        help="LLRD type")
+
     args = parser.parse_args()
     return args
 
@@ -125,10 +130,10 @@ def get_optimizer_params(model, type='s'):
             {'params': [p for n, p in model.roberta.named_parameters() if any(nd in n for nd in no_decay)],
              'weight_decay': 0.0},
             {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and "roberta" not in n],
-             'lr': 1e-3,
+             'lr': learning_rate*10,
              'weight_decay':0.01},
             {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and "roberta" not in n],
-             'lr': 1e-3,
+             'lr': learning_rate*10,
              'weight_decay':0.0},
         ]
     elif type == 'a':
@@ -150,9 +155,9 @@ def get_optimizer_params(model, type='s'):
             {'params': [p for n, p in model.roberta.named_parameters() if any(nd in n for nd in no_decay) and any(
                 nd in n for nd in group3)], 'weight_decay': 0.0, 'lr': learning_rate*2.6},
             {'params': [p for n, p in model.named_parameters() if not any(
-                nd in n for nd in no_decay) and "roberta" not in n], 'lr':1e-3, 'weight_decay': 0.01},
+                nd in n for nd in no_decay) and "roberta" not in n], 'lr':learning_rate*10, 'weight_decay': 0.01},
             {'params': [p for n, p in model.named_parameters() if any(
-                nd in n for nd in no_decay) and "roberta" not in n], 'lr':1e-3, 'weight_decay': 0.0},
+                nd in n for nd in no_decay) and "roberta" not in n], 'lr':learning_rate*10, 'weight_decay': 0.0},
         ]
     return optimizer_parameters
 
@@ -206,7 +211,7 @@ def get_datasets():
     ds_train, ds_test = train_test_split(
         ds, test_size=0.2, random_state=42)
     ds_train, ds_eval = train_test_split(
-        ds_train, test_size=0.25, random_state=args.seed)
+        ds_train, test_size=0.25, random_state=42)
 
     ds_train = ds_train.reset_index(drop=True)
     ds_test = ds_test.reset_index(drop=True)
@@ -223,10 +228,10 @@ def train(model, tokenizer, ds_train, ds_eval):
         'eval': []
     }
     min_eval_loss = float('inf')
-    params = get_optimizer_params(model, 'i')
+    params = get_optimizer_params(model, args.llrd_type)
     optim = torch.optim.AdamW(params, args.learning_rate)
-    scheduler = get_cosine_schedule_with_warmup(
-        optim, num_warmup_steps=len(ds_train) * args.num_train_epochs // 2, num_training_steps=len(ds_train) * args.num_train_epochs)
+    # scheduler = get_linear_schedule_with_warmup(
+    #     optim, num_warmup_steps=len(ds_train) * args.num_train_epochs, num_training_steps=len(ds_train) * args.num_train_epochs)
     for epoch in range(args.num_train_epochs):
         avg_loss = 0
         optim.zero_grad()
@@ -244,7 +249,7 @@ def train(model, tokenizer, ds_train, ds_eval):
                 optim.zero_grad()
                 loss.backward()
                 optim.step()
-                scheduler.step()
+                # scheduler.step()
                 avg_loss += (loss.item() / len(ds_train))
                 tepoch.set_description(f'Train Epoch {epoch}')
                 tepoch.set_postfix(loss=loss.item())
