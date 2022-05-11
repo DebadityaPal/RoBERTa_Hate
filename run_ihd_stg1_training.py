@@ -1,4 +1,5 @@
 import argparse
+from cProfile import label
 import random
 import torch
 import os
@@ -10,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import RobertaConfig, RobertaTokenizer, get_linear_schedule_with_warmup, RobertaModel
 from modelling.mixout import recursive_setattr, replace_layer_for_mixout
+from sklearn.metrics import f1_score
 
 
 class ImplicitHateDataset(Dataset):
@@ -177,7 +179,7 @@ def initialize_mixout(model):
     if args.mixout_rate > 0:
         print("Initializing Mixout with probability: ", args.mixout_rate)
         for name, module in tuple(model.named_modules()):
-            if name:
+            if name and 'roberta' in name:
                 recursive_setattr(model, name, replace_layer_for_mixout(
                     module, mixout_prob=args.mixout_rate))
 
@@ -231,7 +233,7 @@ def calculate_label_weights(ds):
     return label_weights
 
 
-def train(model, tokenizer, ds_train, ds_eval):
+def train(model, tokenizer, ds_train, ds_eval, label_weights):
     device = torch.device(
         'cuda') if torch.cuda.is_available() else torch.device('cpu')
     model.to(device)
@@ -239,7 +241,7 @@ def train(model, tokenizer, ds_train, ds_eval):
         'train': [],
         'eval': []
     }
-    min_eval_loss = float('inf')
+    max_f1_score = 0
     params = get_optimizer_params(model, args.llrd_type)
     optim = torch.optim.AdamW(params, args.learning_rate)
     scheduler = get_linear_schedule_with_warmup(
@@ -256,7 +258,8 @@ def train(model, tokenizer, ds_train, ds_eval):
                     stg1_labels = label.to(device)
                     attention_mask = inputs['attention_mask'].to(device)
                 outputs = model(input_ids, attention_mask=attention_mask)
-                criterion = nn.CrossEntropyLoss()
+                criterion = nn.CrossEntropyLoss(
+                    weight=torch.tensor(label_weights, dtype=torch.float).to(device))
                 loss = criterion(outputs, stg1_labels)
                 optim.zero_grad()
                 loss.backward()
@@ -270,6 +273,8 @@ def train(model, tokenizer, ds_train, ds_eval):
         loss_history['train'].append(avg_loss)
         avg_loss = 0
         model.eval()
+        ground_labels = []
+        pred_labels = []
         with torch.no_grad():
             with tqdm(ds_eval, unit='batch', leave=True, position=0) as eepoch:
                 for batch_idx, (text, label) in enumerate(eepoch):
@@ -279,6 +284,9 @@ def train(model, tokenizer, ds_train, ds_eval):
                     stg1_labels = label.to(device)
                     attention_mask = inputs['attention_mask'].to(device)
                     outputs = model(input_ids, attention_mask=attention_mask)
+                    ground_labels = ground_labels + label.tolist()
+                    pred_labels = pred_labels + \
+                        torch.argmax(outputs, dim=1).tolist()
                     criterion = nn.CrossEntropyLoss()
                     loss = criterion(outputs, stg1_labels)
                     avg_loss += (loss.item() / len(ds_eval))
@@ -287,8 +295,9 @@ def train(model, tokenizer, ds_train, ds_eval):
                     torch.cuda.empty_cache()
 
         loss_history['eval'].append(avg_loss)
-        if avg_loss < min_eval_loss:
-            min_eval_loss = avg_loss
+        cur_f1_score = f1_score(ground_labels, pred_labels, average='macro')
+        if cur_f1_score > max_f1_score:
+            max_f1_score = cur_f1_score
             torch.save(model.state_dict(), os.path.join(
                 args.output_dir, 'model.pt'))
 
@@ -304,6 +313,8 @@ def main():
     torch.cuda.manual_seed(args.seed)
     print("Setting up datasets ...")
     ds_train, ds_eval, ds_test = get_datasets()
+    label_weights = calculate_label_weights(ds_train)
+    print("Label weights: ", label_weights)
     ds_train.to_csv(os.path.join(args.output_dir, 'train.csv'), index=False)
     ds_test.to_csv(os.path.join(args.output_dir, 'test.csv'), index=False)
     ds_eval.to_csv(os.path.join(args.output_dir, 'eval.csv'), index=False)
@@ -319,10 +330,10 @@ def main():
     print("Setting up model ...")
     config = RobertaConfig.from_pretrained(args.roberta_model_path)
     model = IHDModel()
-    re_init_layers(model, config)
     initialize_mixout(model)
+    re_init_layers(model, config)
     print("Starting training...")
-    loss_history = train(model, tokenizer, ds_train, ds_eval)
+    loss_history = train(model, tokenizer, ds_train, ds_eval, label_weights)
     print("Saving loss history...")
     loss_history = pd.DataFrame(
         data=loss_history, index=range(args.num_train_epochs))
