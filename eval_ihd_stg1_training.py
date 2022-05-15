@@ -7,6 +7,7 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import RobertaTokenizer, RobertaModel
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from modelling.roberta import WeightedLayerPooling
 
 
 class ImplicitHateDataset(Dataset):
@@ -32,6 +33,12 @@ class IHDModel(torch.nn.Module):
     def __init__(self):
         super(IHDModel, self).__init__()
         self.roberta = RobertaModel.from_pretrained('roberta-base')
+        # Average last 4 layers
+        # self.pooler = WeightedLayerPooling(
+        #     num_hidden_layers=self.roberta.config.num_hidden_layers, layer_start=9)
+        # Concat Last 4 layers embeddings
+        # self.fc1 = torch.nn.Linear(768*4, 100)
+        # Last layer embeddings
         self.fc1 = torch.nn.Linear(768, 100)
         self.act1 = torch.nn.Tanh()
         self.fc2 = torch.nn.Linear(100, 100)
@@ -40,8 +47,15 @@ class IHDModel(torch.nn.Module):
 
     def forward(self, input_ids, attention_mask):
         outputs = self.roberta(
-            input_ids, attention_mask=attention_mask)
+            input_ids, attention_mask=attention_mask, output_hidden_states=True)
         x = outputs[0]
+        # Average last 4 layers
+        # x = self.pooler(x)
+        # Concat last 4 layers embeddings
+        # x = torch.cat((x[-4][:, 0], x[-3][:, 0], x[-2]
+        #               [:, 0], x[-1][:, 0]), dim=1)
+        # x = self.fc1(x)
+        # Last Layer embeddings
         x = self.fc1(x[:, 0, :])
         x = self.act1(x)
         x = self.fc2(x)
